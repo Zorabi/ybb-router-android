@@ -25,6 +25,7 @@ public final class MainActivity extends Activity {
     private RouterApplication app;
     private Repository repo;
     private NativeUi ui;
+    private android.content.SharedPreferences shortcuts;
     private LinearLayout root, body, bottom, header;
     private TextView screenStatus;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -36,8 +37,10 @@ public final class MainActivity extends Activity {
     private boolean resumed, deviceLoading, loginRequired, destroyed, freshDevices;
     private String homeSignature = "", errorText = "";
     private JSONObject selectedGame;
-    private String regionBack = "games";
+    private String regionBack = "games", gamesBack = "home";
+    private boolean favoriteOnly = true;
     private GameAdapter gameAdapter;
+    private PopupWindow deviceMenu;
     private int gameRequest;
     private final Set<String> prefetched = new HashSet<>();
     private final Map<String,TextView> deviceStatuses = new HashMap<>();
@@ -72,11 +75,13 @@ public final class MainActivity extends Activity {
     interface Done<T> { void accept(T value); }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); ui = new NativeUi(this); app = (RouterApplication)getApplication(); repo = app.repository;
+        shortcuts = getSharedPreferences("shortcuts", MODE_PRIVATE);
         config = Repository.object(repo.cached("config")); deviceData = Repository.object(repo.cached("devices"));
         routers = Repository.array(repo.cached("routers"));
         JSONObject old = repo.cached("devices"); serverTime = old == null ? 0 : old.optLong("server_time");
         if (state != null) {
             page = state.getString("page", "home"); type = state.getString("type", "ps5"); query = state.getString("query", "");
+            favoriteOnly = state.getBoolean("favoriteOnly", true); gamesBack = state.getString("gamesBack", "home");
             deviceQuery = state.getString("deviceQuery", ""); regionBack = state.getString("regionBack", "games");
             try { if (state.containsKey("selectedGame")) selectedGame = new JSONObject(state.getString("selectedGame")); } catch(Exception ignored) {}
             if ("regions".equals(page) && selectedGame == null) page = "home";
@@ -94,6 +99,7 @@ public final class MainActivity extends Activity {
         if (error instanceof ApiClient.Failure && ((ApiClient.Failure)error).needsLogin()) {
             loginRequired = true; errorText = "登录已过期，请重新登录";
         } else if (error instanceof java.io.IOException) errorText = "网络连接失败，已保留本地内容，请重试";
+        else if (error instanceof org.json.JSONException) errorText = "服务暂未返回完整数据，请稍后刷新";
         else errorText = error.getMessage() == null ? "操作失败，请重试" : error.getMessage();
         if (screenStatus != null) screenStatus.setText(errorText);
         if ("home".equals(page)) renderHome(true);
@@ -101,24 +107,27 @@ public final class MainActivity extends Activity {
     }
     private void toast(String text) { Toast.makeText(this, text, Toast.LENGTH_SHORT).show(); }
     private void showPage() {
+        if(deviceMenu!=null)deviceMenu.dismiss();
         gameRequest++; gameAdapter = null; homeSignature = "";
         root = ui.column(); root.setBackgroundColor(ui.bg);
         header = ui.row(); header.setPadding(ui.dp(20), ui.dp(10), ui.dp(12), ui.dp(10));
         boolean main = "home".equals(page) || "mine".equals(page);
-        if (!main) header.addView(ui.button("返回", false, v -> back()));
-        String title = title(); TextView heading = ui.label(title, main ? 27 : 21, ui.text, true);
+        if (!main) header.addView(ui.iconButton(R.drawable.ic_back,"返回",v -> back()));
+        String title = title(); TextView heading = ui.label(title, main ? 26 : 21, ui.text, true);
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(0, -2, 1); if (!main) hp.leftMargin = ui.dp(12); header.addView(heading, hp);
-        if (main) header.addView(ui.button("刷新", false, v -> { if ("home".equals(page)) refreshHome(); else loadMine(true); }));
+        if (main) header.addView(ui.iconButton(R.drawable.ic_refresh, "刷新", v -> { if ("home".equals(page)) refreshHome(); else loadMine(true); }));
         if ("games".equals(page)) header.addView(ui.button("更新", false, v -> refreshCatalog()));
         root.addView(header);
         screenStatus = ui.label("", 12, ui.muted, false); screenStatus.setPadding(ui.dp(22), 0, ui.dp(22), ui.dp(8)); root.addView(screenStatus);
         body = ui.column(); root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
         if (main) {
             bottom = ui.row(); bottom.setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8)); bottom.setBackgroundColor(ui.surface);
-            Button home = ui.button("加速", false, v -> navigate("home")); home.setSelected("home".equals(page));
-            Button mine = ui.button("我的", false, v -> navigate("mine")); mine.setSelected("mine".equals(page));
-            bottom.addView(home, new LinearLayout.LayoutParams(0, ui.dp(50), 1)); bottom.addView(mine, new LinearLayout.LayoutParams(0, ui.dp(50), 1)); root.addView(bottom);
+            Button home = ui.navigation("游戏加速", R.drawable.ic_home, "home".equals(page), v -> navigate("home"));
+            Button mine = ui.navigation("我的", R.drawable.ic_user, "mine".equals(page), v -> navigate("mine"));
+            bottom.addView(home, new LinearLayout.LayoutParams(0, ui.dp(62), 1)); bottom.addView(mine, new LinearLayout.LayoutParams(0, ui.dp(62), 1)); root.addView(bottom);
         }
+        getWindow().setStatusBarColor(ui.bg); getWindow().setNavigationBarColor(ui.surface);
+        getWindow().getDecorView().setSystemUiVisibility(ui.dark ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         setContentView(root);
         switch (page) {
             case "home": renderHome(true); break;
@@ -158,6 +167,7 @@ public final class MainActivity extends Activity {
                 handler.post(() -> {
                     deviceLoading = false; if (destroyed || epoch != repo.epoch()) return;
                     freshDevices = true; deviceData = Repository.object(data); serverTime = data.optLong("server_time"); serverTimeAtElapsed = android.os.SystemClock.elapsedRealtime(); loginRequired = false; errorText = "";
+                    updateFavoriteDetails();
                     checkPending();
                     if ("home".equals(page)) renderHome(force);
                     prefetch();
@@ -183,7 +193,46 @@ public final class MainActivity extends Activity {
     private List<JSONObject> devices() {
         ArrayList<JSONObject> out=new ArrayList<>(); JSONArray source=deviceData.optJSONArray("device_list");
         if(source!=null) for(int i=0;i<source.length();i++) {JSONObject d=source.optJSONObject(i);if(d!=null&&!d.optString("host").contains("MiWiFi"))out.add(d);}
-        Collections.sort(out,GameRules.deviceOrder(config)); return out;
+        Comparator<JSONObject> fallback = GameRules.deviceOrder(config);
+        Collections.sort(out, (a, b) -> {
+            int favorite = Boolean.compare(favoriteDevice(b), favoriteDevice(a));
+            return favorite != 0 ? favorite : fallback.compare(a, b);
+        }); return out;
+    }
+    private String deviceKey(JSONObject device) {
+        String mac = device.optString("mac").toLowerCase(Locale.ROOT);
+        return mac.isEmpty() ? "" : deviceData.optString("router_sn") + ":" + mac;
+    }
+    private boolean favoriteDevice(JSONObject device) {
+        String key = deviceKey(device);
+        return !key.isEmpty() && shortcuts.getBoolean("device_" + key, false);
+    }
+    private List<String> recentGames(String platform) {
+        ArrayList<String> ids = new ArrayList<>();
+        try {
+            JSONArray values = new JSONArray(shortcuts.getString("games_" + platform, "[]"));
+            for (int i = 0; i < values.length(); i++) {
+                String id = values.optString(i);
+                if (!id.isEmpty() && !ids.contains(id)) ids.add(id);
+            }
+        } catch (Exception ignored) {}
+        return ids;
+    }
+    private void rememberGame(String platform, String id) {
+        List<String> ids = recentGames(platform);
+        ids.remove(id); ids.add(0, id);
+        if (ids.size() > 6) ids = new ArrayList<>(ids.subList(0, 6));
+        shortcuts.edit().putString("games_" + platform, new JSONArray(ids).toString())
+                .remove("hidden_game_" + platform + "_" + id).apply();
+    }
+    private void removeRecentGame(String platform, JSONObject game) {
+        String id=game.optString("id");List<String> ids=recentGames(platform);ids.remove(id);
+        shortcuts.edit().putString("games_"+platform,new JSONArray(ids).toString())
+                .putBoolean("hidden_game_"+platform+"_"+id,true).apply();
+        filterGames();toast("已从最近使用中移除「"+game.optString("name")+"」");
+    }
+    private void chooseGame(JSONObject game) {
+        selectedGame=game;regionBack="games";page="regions";showPage();
     }
     private String routerName() {
         JSONObject r=routers.optJSONObject(0); if(r==null)return "尚未绑定路由器";
@@ -191,6 +240,7 @@ public final class MainActivity extends Activity {
     }
     private void renderHome(boolean force) {
         if (!"home".equals(page)) return;
+        if(deviceMenu!=null&&deviceMenu.isShowing()){updateElapsedLabels();return;}
         String signature=devices().toString()+deviceData.optString("router_sn")+deviceData.optString("version")+config.toString()+routers.toString()+errorText+app.pendingIp+app.workingIp+app.commandBusy.get()+deviceQuery;
         if (!force&&signature.equals(homeSignature)) {
             screenStatus.setText((freshDevices?"已同步 · ":"上次同步 · ")+clock(serverTime));
@@ -205,15 +255,32 @@ public final class MainActivity extends Activity {
             ui.add(card,ui.button("百度账号登录",true,v->login()),18);ui.add(content,card,0);return;
         }
         List<JSONObject> list=devices(); int count=0;for(JSONObject d:list)if(d.optBoolean("acc_status"))count++;
-        LinearLayout router=ui.card(); ui.add(router,ui.label(routerName(),22,ui.text,true),0);
         boolean online=!deviceData.optString("router_sn").isEmpty();
-        ui.add(router,ui.label((online?(freshDevices?"路由器在线":"上次在线"):"等待路由器连接")+"   ·   "+list.size()+" 台设备",13,online?ui.green:ui.muted,false),10);
-        LinearLayout stats=ui.row();TextView stat=ui.label(count>0?count+" 台设备正在加速":"准备好，开始畅玩",19,ui.text,true); stats.addView(stat,new LinearLayout.LayoutParams(0,-2,1));
-        Button settings=ui.button("游戏设置",false,v->navigate("types"));stats.addView(settings);ui.add(router,stats,16);ui.add(content,router,0);
-        if(routers.length()==0)ui.add(content,ui.label("请先在小米 WiFi 的游帮帮插件中完成首次绑定，再刷新本页。",14,ui.muted,false),16);
-        LinearLayout section=ui.row();section.addView(ui.label("加速设备",19,ui.text,true),new LinearLayout.LayoutParams(0,-2,1));
-        section.addView(ui.label(list.size()+" 台",13,ui.muted,false));ui.add(content,section,26);
-        EditText search=ui.search("搜索设备名称或 IP");search.setText(deviceQuery);ui.add(content,search,12);
+        LinearLayout router=ui.card(); router.setBackground(ui.shape(ui.hero,22));
+        LinearLayout summary=ui.row();
+        summary.addView(ui.symbol(R.drawable.ic_router,android.graphics.Color.WHITE,NativeUi.c("#395FCB")),new LinearLayout.LayoutParams(ui.dp(44),ui.dp(44)));
+        LinearLayout routerLabels=ui.column();routerLabels.setPadding(ui.dp(12),0,0,0);
+        ui.add(routerLabels,ui.label(routerName(),18,android.graphics.Color.WHITE,true),0);
+        ui.add(routerLabels,ui.label(online?(freshDevices?"路由器已连接":"上次连接的路由器"):"等待路由器连接",12,NativeUi.c("#DBE6FF"),false),6);
+        summary.addView(routerLabels,new LinearLayout.LayoutParams(0,-2,1));
+        Button settings=ui.iconButton(R.drawable.ic_arrow,"游戏与线路设置",v->navigate("types"));
+        settings.setCompoundDrawables(ui.icon(R.drawable.ic_arrow,android.graphics.Color.WHITE,24),null,null,null);summary.addView(settings);
+        ui.add(router,summary,0);
+        ui.add(router,ui.label(count>0?count+" 台设备正在加速":"选择设备，开启你的游戏时间",14,android.graphics.Color.WHITE,false),18);
+        ui.add(content,router,0);
+        if(routers.length()==0)ui.add(content,ui.label("请先在小米 WiFi 的游帮帮插件中完成首次绑定。",14,ui.muted,false),16);
+        LinearLayout section=ui.row();section.addView(ui.label("我的设备",20,ui.text,true),new LinearLayout.LayoutParams(0,-2,1));
+        section.addView(ui.button("清理常用记录",false,v->cleanMissingFavorites()));ui.add(content,section,24);
+        LinearLayout filters=ui.row();filters.setPadding(ui.dp(4),ui.dp(4),ui.dp(4),ui.dp(4));filters.setBackground(ui.shape(ui.soft,14));
+        int favorites=0;for(JSONObject d:list)if(favoriteDevice(d))favorites++;
+        Button all=ui.button("全部设备",false,v->{favoriteOnly=false;renderHome(true);});
+        Button common=ui.button("常用设备 · "+favorites,false,v->{favoriteOnly=true;renderHome(true);});
+        all.setBackground(ui.states(!favoriteOnly?ui.surface:android.graphics.Color.TRANSPARENT,ui.tint));
+        common.setBackground(ui.states(favoriteOnly?ui.surface:android.graphics.Color.TRANSPARENT,ui.tint));
+        all.setTextColor(!favoriteOnly?ui.text:ui.muted);common.setTextColor(favoriteOnly?ui.text:ui.muted);
+        all.setSelected(!favoriteOnly);common.setSelected(favoriteOnly);
+        filters.addView(common,new LinearLayout.LayoutParams(0,-2,1));filters.addView(all,new LinearLayout.LayoutParams(0,-2,1));ui.add(content,filters,14);
+        EditText search=ui.search("搜索设备名称或 IP");search.setContentDescription("搜索设备名称或 IP");search.setText(deviceQuery);ui.add(content,search,12);
         LinearLayout cards=ui.column();ui.add(content,cards,0);
         renderDeviceCards(cards,list);
         search.addTextChangedListener(watcher(value->{deviceQuery=value;renderDeviceCards(cards,list);}));
@@ -223,16 +290,24 @@ public final class MainActivity extends Activity {
         holder.removeAllViews();deviceStatuses.clear();int visible=0;String needle=deviceQuery.toLowerCase(Locale.ROOT);
         for(JSONObject device:list) {
             String name=device.optString("host");String t=GameRules.effectiveType(device,config);if(name.isEmpty())name=GameRules.typeName(t);
+            if(favoriteOnly&&!favoriteDevice(device))continue;
             if(!(name+" "+device.optString("ip")).toLowerCase(Locale.ROOT).contains(needle))continue;visible++;
             LinearLayout card=ui.card();boolean active=device.optBoolean("acc_status");
-            LinearLayout top=ui.row();LinearLayout names=ui.column();ui.add(names,ui.label(name,17,ui.text,true),0);
-            ui.add(names,ui.label(GameRules.typeName(t)+" · "+device.optString("ip"),12,ui.muted,false),6);top.addView(names,new LinearLayout.LayoutParams(0,-2,1));
-            Button more=ui.button("类型",false,v->chooseDeviceType(device));top.addView(more);ui.add(card,top,0);
-            JSONObject choice=config.optJSONObject(t);String game=choice==null?"选择游戏":choice.optString("name","选择游戏");
-            LinearLayout gameRow=ui.row(); Button gameButton=ui.button(game,false,v->openGames(t));gameButton.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);gameButton.setMaxLines(2);
-            gameRow.addView(gameButton,new LinearLayout.LayoutParams(0,-2,1));
-            Button region=ui.button(choice==null?"区服":GameRules.regionName(choice.optString("region")),false,v->openCurrentRegion(t));gameRow.addView(region);ui.add(card,gameRow,14);
-            LinearLayout action=ui.row();String state=active?"加速中":"未加速";
+            LinearLayout top=ui.row();
+            top.addView(ui.symbol(R.drawable.ic_device,ui.accent,ui.tint),new LinearLayout.LayoutParams(ui.dp(44),ui.dp(44)));
+            LinearLayout names=ui.column();names.setPadding(ui.dp(12),0,ui.dp(4),0);
+            TextView deviceName=ui.label(name,16,ui.text,true);deviceName.setMaxLines(2);deviceName.setEllipsize(android.text.TextUtils.TruncateAt.END);ui.add(names,deviceName,0);
+            ui.add(names,ui.label(GameRules.typeName(t)+(favoriteDevice(device)?" · 常用":"")+" · "+device.optString("ip"),11,ui.muted,false),6);
+            top.addView(names,new LinearLayout.LayoutParams(0,-2,1));
+            top.addView(ui.iconButton(R.drawable.ic_more,name+"，更多设置",v->deviceOptions(device,v)));
+            ui.add(card,top,0);
+            JSONObject choice=config.optJSONObject(t);String game=choice==null?"选择要玩的游戏":choice.optString("name","选择要玩的游戏");
+            LinearLayout gameRow=ui.row();
+            gameRow.addView(ui.selection("加速游戏",game,R.drawable.ic_game,v->openGames(t)),new LinearLayout.LayoutParams(0,-2,1));
+            Button region=ui.button(choice==null?"区服":GameRules.regionName(choice.optString("region")),false,v->openCurrentRegion(t));
+            ui.trailingIcon(region,R.drawable.ic_arrow,ui.accent,16);region.setTextSize(13);region.setPadding(ui.dp(10),ui.dp(8),0,ui.dp(8));region.setContentDescription("修改区服");
+            gameRow.addView(region);ui.add(card,gameRow,16);
+            LinearLayout action=ui.row();String state=active?"加速中":"准备就绪";
             if(app.pendingIp.equals(device.optString("ip")))state=app.pendingStart?"正在启动…":"正在停止…";
             if(app.workingIp.equals(device.optString("ip")))state=app.workingStart?"正在启动…":"正在停止…";
             JSONObject info=device.optJSONObject("acc_info");if(active&&info!=null){long start=info.optLong("start_time");if(start>0)state+=" · "+duration(Math.max(0,estimatedServerTime()-start));}
@@ -243,7 +318,7 @@ public final class MainActivity extends Activity {
             Button start=ui.button(waiting?"":active?"停止加速":"开始加速",true,v->{if(active)stop(device);else start(device);});
             start.setTextColor(android.graphics.Color.WHITE);
             android.graphics.drawable.StateListDrawable actionBackground=new android.graphics.drawable.StateListDrawable();
-            int normal=NativeUi.c(ui.dark?"#406EDB":"#2D5DE0");
+            int normal=ui.primary;
             int pressed=NativeUi.c(ui.dark?"#527CE0":"#204AB9");
             actionBackground.addState(new int[]{-android.R.attr.state_enabled},ui.shape(waiting?normal:NativeUi.c(ui.dark?"#3C5FB0":"#4967B4"),12));
             actionBackground.addState(new int[]{},ui.states(normal,pressed));
@@ -265,7 +340,85 @@ public final class MainActivity extends Activity {
             }
             action.addView(control,new LinearLayout.LayoutParams(ui.dp(136),ui.dp(48)));ui.add(card,action,12);ui.add(holder,card,12);
         }
-        if(visible==0)ui.add(holder,ui.label(list.isEmpty()?"等待设备列表，点击右上角刷新":"没有匹配的设备",14,ui.muted,false),24);
+        if(visible==0){
+            LinearLayout empty=ui.card();
+            ui.add(empty,ui.label(favoriteOnly?"把常用设备留在这里":"没有找到设备",18,ui.text,true),0);
+            ui.add(empty,ui.label(favoriteOnly?"在全部设备中点击右上角的更多按钮，即可设为常用。":list.isEmpty()?"点击右上角刷新，获取路由器设备列表。":"试试其他设备名称或 IP。",14,ui.muted,false),10);
+            ui.add(holder,empty,16);
+        }
+    }
+    private void updateFavoriteDetails(){
+        android.content.SharedPreferences.Editor editor=shortcuts.edit();long now=System.currentTimeMillis();
+        for(JSONObject device:devices()){
+            if(!favoriteDevice(device))continue;
+            String key=deviceKey(device);String name=device.optString("host",GameRules.typeName(GameRules.effectiveType(device,config)));
+            if(!name.equals(shortcuts.getString("device_name_"+key,"")))editor.putString("device_name_"+key,name);
+            if(now-shortcuts.getLong("device_seen_"+key,0)>=60000)editor.putLong("device_seen_"+key,now);
+        }
+        editor.apply();
+    }
+    private void cleanMissingFavorites(){
+        if(!freshDevices){toast("请先刷新设备列表再清理");return;}
+        String router=deviceData.optString("router_sn");
+        if(router.isEmpty()||deviceData.optJSONArray("device_list")==null){toast("请先连接路由器再清理");return;}
+        Set<String> present=new HashSet<>();for(JSONObject device:devices())present.add("device_"+deviceKey(device));
+        String prefix="device_"+router+":";ArrayList<String> keys=new ArrayList<>();
+        for(Map.Entry<String,?> entry:shortcuts.getAll().entrySet())
+            if(entry.getKey().startsWith(prefix)&&Boolean.TRUE.equals(entry.getValue())&&!present.contains(entry.getKey()))keys.add(entry.getKey());
+        Collections.sort(keys);
+        if(keys.isEmpty()){toast("没有未出现在当前列表中的常用设备");return;}
+        String[] labels=new String[keys.size()];boolean[] selected=new boolean[keys.size()];
+        for(int i=0;i<keys.size();i++){
+            String key=keys.get(i).substring("device_".length());
+            String name=shortcuts.getString("device_name_"+key,"名称未知");long seen=shortcuts.getLong("device_seen_"+key,0);
+            String lastSeen=seen>0?"最后出现 · "+new SimpleDateFormat("yyyy.MM.dd HH:mm",Locale.CHINA).format(new Date(seen)):"最后出现时间未知（更新前记录）";
+            labels[i]=name+"\nMAC · "+keys.get(i).substring(prefix.length())+"\n"+lastSeen;
+        }
+        LinearLayout heading=ui.column();heading.setPadding(ui.dp(24),ui.dp(20),ui.dp(24),ui.dp(12));
+        ui.add(heading,ui.label("清理未发现的常用设备",19,ui.text,true),0);
+        ui.add(heading,ui.label("以下设备未出现在当前列表中，可能暂时离线或已更换 MAC。请确认不再使用后再移除。",13,ui.muted,false),10);
+        new AlertDialog.Builder(this).setCustomTitle(heading)
+                .setMultiChoiceItems(labels,selected,(dialog,index,checked)->selected[index]=checked)
+                .setNegativeButton("取消",null).setPositiveButton("移除所选",(dialog,which)->{
+                    android.content.SharedPreferences.Editor editor=shortcuts.edit();int count=0;
+                    for(int i=0;i<keys.size();i++)if(selected[i]){
+                        String key=keys.get(i).substring("device_".length());
+                        editor.remove(keys.get(i)).remove("device_name_"+key).remove("device_seen_"+key);count++;
+                    }
+                    editor.apply();renderHome(true);toast(count==0?"未选择记录":"已清理 "+count+" 条常用记录");
+                }).show();
+    }
+    private void deviceOptions(JSONObject device, View anchor) {
+        LinearLayout content=ui.column();content.setPadding(ui.dp(8),ui.dp(8),ui.dp(8),ui.dp(8));
+        int width=Math.min(ui.dp(216),getResources().getDisplayMetrics().widthPixels-ui.dp(32));
+        PopupWindow menu=new PopupWindow(content,width,ViewGroup.LayoutParams.WRAP_CONTENT,true);
+        deviceMenu=menu;
+        menu.setOnDismissListener(()->{deviceMenu=null;if(!destroyed&&"home".equals(page))renderHome(true);});
+        menu.setBackgroundDrawable(ui.shape(ui.surface,18));menu.setElevation(ui.dp(12));
+        menu.setOutsideTouchable(true);menu.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
+        boolean favorite=favoriteDevice(device);
+        Button pin=ui.button(favorite?"取消常用设备":"设为常用设备",false,v->{
+            menu.dismiss();
+            if(deviceKey(device).isEmpty()){toast("此设备缺少标识，暂时无法设为常用");return;}
+            String key=deviceKey(device);
+            android.content.SharedPreferences.Editor editor=shortcuts.edit().putBoolean("device_"+key,!favorite);
+            if(favorite)editor.remove("device_name_"+key).remove("device_seen_"+key);
+            else {
+                editor.putString("device_name_"+key,device.optString("host",GameRules.typeName(GameRules.effectiveType(device,config))));
+                if(freshDevices)editor.putLong("device_seen_"+key,System.currentTimeMillis());
+            }
+            editor.apply();renderHome(true);
+        });
+        pin.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);pin.setTextColor(ui.text);
+        pin.setCompoundDrawables(ui.icon(R.drawable.ic_star,ui.accent,20),null,null,null);pin.setCompoundDrawablePadding(ui.dp(12));
+        ui.add(content,pin,0);
+        View divider=new View(this);divider.setBackgroundColor(ui.line);
+        LinearLayout.LayoutParams line=new LinearLayout.LayoutParams(-1,ui.dp(1));line.setMargins(ui.dp(12),ui.dp(4),ui.dp(12),ui.dp(4));content.addView(divider,line);
+        Button kind=ui.button("修改设备类型",false,v->{menu.dismiss();chooseDeviceType(device);});
+        kind.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);kind.setTextColor(ui.text);
+        kind.setCompoundDrawables(ui.icon(R.drawable.ic_device,ui.muted,20),null,null,null);kind.setCompoundDrawablePadding(ui.dp(12));
+        ui.add(content,kind,0);
+        menu.showAsDropDown(anchor,anchor.getWidth()-width,ui.dp(6));
     }
     private String clock(long seconds){return new SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(new Date(seconds*1000));}
     private String duration(long s){return String.format(Locale.ROOT,"%02d:%02d:%02d",s/3600,s/60%60,s%60);}
@@ -276,23 +429,30 @@ public final class MainActivity extends Activity {
         screenStatus.setText("按设备类型保存游戏与区服，已选内容可直接修改");LinearLayout content=scrollBody();
         for(String t:GameRules.TYPES){
             if(!GameRules.supported(t,deviceData.optString("version")))continue;
-            LinearLayout card=ui.card();ui.add(card,ui.label(GameRules.typeName(t),18,ui.text,true),0);
-            JSONObject choice=config.optJSONObject(t);ui.add(card,ui.label(choice==null?"尚未配置":choice.optString("name")+" · "+GameRules.regionName(choice.optString("region")),14,ui.muted,false),10);
-            LinearLayout row=ui.row();row.addView(ui.button("选择游戏",false,v->openGames(t)),new LinearLayout.LayoutParams(0,-2,1));
-            if(choice!=null)row.addView(ui.button("修改区服",false,v->openCurrentRegion(t)),new LinearLayout.LayoutParams(0,-2,1));ui.add(card,row,14);ui.add(content,card,12);
+            LinearLayout card=ui.card();LinearLayout top=ui.row();
+            top.addView(ui.symbol(R.drawable.ic_device,ui.accent,ui.tint),new LinearLayout.LayoutParams(ui.dp(40),ui.dp(40)));
+            TextView name=ui.label(GameRules.typeName(t),17,ui.text,true);name.setPadding(ui.dp(12),0,0,0);top.addView(name);ui.add(card,top,0);
+            JSONObject choice=config.optJSONObject(t);
+            ui.add(card,ui.selection("加速游戏",choice==null?"选择游戏":choice.optString("name"),R.drawable.ic_game,v->openGames(t)),14);
+            if(choice!=null){
+                Button region=ui.button("区服 · "+GameRules.regionName(choice.optString("region")),false,v->openCurrentRegion(t));
+                ui.trailingIcon(region,R.drawable.ic_arrow,ui.accent,16);ui.add(card,region,8);
+            }
+            ui.add(content,card,12);
         }
     }
-    private void openGames(String t){type=t;query="";page="games";showPage();}
+    private void openGames(String t){gamesBack=page;type=t;query="";page="games";showPage();}
     private void openCurrentRegion(String t){
         JSONObject c=config.optJSONObject(t);if(c==null||c.optString("game").isEmpty()){openGames(t);return;}
-        try{selectedGame=GameRules.copy(c);selectedGame.put("id",c.optString("game"));type=t;regionBack="home";page="regions";showPage();}catch(Exception e){failure(e);}
+        try{selectedGame=GameRules.copy(c);selectedGame.put("id",c.optString("game"));type=t;regionBack=page;page="regions";showPage();}catch(Exception e){failure(e);}
     }
     private void renderGames(){
         body.removeAllViews();LinearLayout searchBox=ui.column();searchBox.setPadding(ui.dp(20),ui.dp(4),ui.dp(20),ui.dp(12));
         EditText search=ui.search("搜索中文、英文或拼音");search.setText(query);searchBox.addView(search);body.addView(searchBox);
-        ListView list=new ListView(this);list.setDivider(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));list.setDividerHeight(ui.dp(8));list.setClipToPadding(false);list.setPadding(ui.dp(20),0,ui.dp(20),ui.dp(16));list.setFastScrollEnabled(true);
+        ListView list=new ListView(this);list.setDivider(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));list.setDividerHeight(ui.dp(8));list.setClipToPadding(false);list.setPadding(ui.dp(20),0,ui.dp(20),ui.dp(16));list.setFastScrollEnabled(true);list.setSelector(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
         gameAdapter=new GameAdapter();list.setAdapter(gameAdapter);body.addView(list,new LinearLayout.LayoutParams(-1,0,1));
-        list.setOnItemClickListener((parent,view,position,id)->{selectedGame=gameAdapter.items.get(position);regionBack="games";page="regions";showPage();});
+        list.setItemsCanFocus(true);
+        list.setOnItemClickListener((parent,view,position,id)->chooseGame(gameAdapter.items.get(position)));
         search.addTextChangedListener(watcher(value->{query=value;filterGames();}));
         int ticket=gameRequest;JSONObject local=repo.cached("games_"+GameRules.platform(type));
         if(local!=null){gameAdapter.source=Repository.array(local);filterGames();}
@@ -303,6 +463,11 @@ public final class MainActivity extends Activity {
     private void filterGames(){
         if(gameAdapter==null)return;GameAdapter adapter=gameAdapter;String needle=query;
         int revision=adapter.revision.incrementAndGet();JSONArray source=adapter.source;String platform=type;
+        List<String> recent = recentGames(platform);
+        JSONObject current = config.optJSONObject(platform);
+        if (current != null && !current.optString("game").isEmpty() && !recent.contains(current.optString("game"))
+                && !shortcuts.getBoolean("hidden_game_"+platform+"_"+current.optString("game"),false))
+            recent.add(current.optString("game"));
         app.network.execute(()->{
             List<JSONObject> items=GameRules.games(source,needle);
             boolean noMatches=items.isEmpty()&&!needle.trim().isEmpty();
@@ -310,13 +475,15 @@ public final class MainActivity extends Activity {
             if(needle.trim().isEmpty()){
                 List<String> priority=downloadGames(platform);
                 Collections.sort(items,(a,b)->{
+                    int ar=recent.indexOf(a.optString("id")),br=recent.indexOf(b.optString("id"));
+                    if(ar>=0||br>=0)return Integer.compare(ar<0?999:ar,br<0?999:br);
                     int ap=priority.indexOf(a.optString("id")),bp=priority.indexOf(b.optString("id"));
                     if(ap>=0||bp>=0)return Integer.compare(ap<0?999:ap,bp<0?999:bp);
                     return a.optString("pname",a.optString("name")).compareToIgnoreCase(b.optString("pname",b.optString("name")));
                 });
             }
             handler.post(()->{if(destroyed||gameAdapter!=adapter||adapter.revision.get()!=revision)return;
-                adapter.items=items;adapter.noMatches=noMatches;adapter.notifyDataSetChanged();
+                adapter.recent=recent;adapter.items=items;adapter.noMatches=noMatches;adapter.notifyDataSetChanged();
                 screenStatus.setText(noMatches?(items.isEmpty()?"未找到游戏，可点击右上角更新目录":"未找到游戏，可尝试下方通用加速"):GameRules.typeName(platform)+" · "+items.size()+" 款游戏");});
         });
     }
@@ -338,25 +505,52 @@ public final class MainActivity extends Activity {
         if(type.startsWith("xbox"))return Collections.singletonList("20000");if(type.startsWith("ps"))return Collections.singletonList("30000");return Collections.emptyList();
     }
     private final class GameAdapter extends BaseAdapter implements SectionIndexer {
+        List<String> recent=Collections.emptyList();
         boolean noMatches;JSONArray source=new JSONArray();List<JSONObject> items=new ArrayList<>();final AtomicInteger revision=new AtomicInteger();
         @Override public int getCount(){return items.size();}
         @Override public JSONObject getItem(int position){return items.get(position);}
         @Override public long getItemId(int position){return position;}
+        private String group(JSONObject game) {
+            if (!query.trim().isEmpty()) return noMatches ? "通用加速" : "搜索结果";
+            String id=game.optString("id");
+            return recent.contains(id)?"最近使用":downloadGames(type).contains(id)?"下载与商城":"全部游戏";
+        }
         @Override public View getView(int position,View convert,ViewGroup parent){
-            LinearLayout row;TextView name,subtitle,badge;
+            LinearLayout wrapper;
             if(convert==null){
-                row=ui.row();row.setPadding(ui.dp(14),ui.dp(12),ui.dp(14),ui.dp(12));row.setMinimumHeight(ui.dp(76));row.setBackground(ui.states(ui.surface,ui.tint));
-                badge=ui.label("",15,ui.accent,true);badge.setGravity(Gravity.CENTER);badge.setBackground(ui.shape(ui.tint,12));row.addView(badge,new LinearLayout.LayoutParams(ui.dp(44),ui.dp(44)));
-                LinearLayout labels=ui.column();labels.setPadding(ui.dp(14),0,ui.dp(8),0);name=ui.label("",16,ui.text,true);subtitle=ui.label("",12,ui.muted,false);ui.add(labels,name,0);ui.add(labels,subtitle,6);
-                row.addView(labels,new LinearLayout.LayoutParams(0,-2,1));row.setTag(new TextView[]{name,subtitle,badge});
-            }else row=(LinearLayout)convert;
-            TextView[] views=(TextView[])row.getTag();JSONObject game=items.get(position);String id=game.optString("id");String title=game.optString("name");
-            views[0].setText(title);String tags=game.optString("tag");views[1].setText(noMatches?"通用加速":downloadGames(type).contains(id)?"下载专用":tags.isEmpty()?GameRules.typeName(type):tags);
+                wrapper=ui.column();
+                TextView section=ui.label("",14,ui.muted,true);section.setPadding(ui.dp(2),ui.dp(14),0,ui.dp(10));ui.add(wrapper,section,0);
+                LinearLayout row=ui.row();row.setPadding(ui.dp(14),ui.dp(14),ui.dp(14),ui.dp(14));row.setMinimumHeight(ui.dp(80));row.setBackground(ui.states(ui.surface,ui.tint));row.setDuplicateParentStateEnabled(true);
+                LinearLayout choice=ui.row();choice.setMinimumHeight(ui.dp(52));choice.setClickable(true);choice.setFocusable(true);
+                choice.setBackground(ui.states(android.graphics.Color.TRANSPARENT,ui.tint));
+                row.addView(choice,new LinearLayout.LayoutParams(0,-2,1));
+                choice.addView(ui.symbol(R.drawable.ic_game,ui.accent,ui.tint),new LinearLayout.LayoutParams(ui.dp(44),ui.dp(44)));
+                LinearLayout labels=ui.column();labels.setPadding(ui.dp(14),0,ui.dp(8),0);
+                TextView name=ui.label("",16,ui.text,true),subtitle=ui.label("",12,ui.muted,false);
+                ui.add(labels,name,0);ui.add(labels,subtitle,6);choice.addView(labels,new LinearLayout.LayoutParams(0,-2,1));
+                TextView badge=ui.label("",12,ui.accent,true);choice.addView(badge);
+                Button remove=ui.button("移除",false,null);remove.setTextSize(13);
+                LinearLayout.LayoutParams removeParams=new LinearLayout.LayoutParams(-2,-2);removeParams.leftMargin=ui.dp(8);row.addView(remove,removeParams);
+                ui.add(wrapper,row,0);wrapper.setTag(new TextView[]{name,subtitle,badge,section,remove});
+            }else wrapper=(LinearLayout)convert;
+            TextView[] views=(TextView[])wrapper.getTag();JSONObject game=items.get(position);String id=game.optString("id");
+            String group=group(game);views[3].setText(group);
+            views[3].setVisibility(position==0||!group.equals(group(items.get(position-1)))?View.VISIBLE:View.GONE);
             JSONObject c=config.optJSONObject(type);boolean chosen=c!=null&&id.equals(c.optString("game"));
-            views[2].setText(chosen?"已选":title.isEmpty()?"游":title.substring(0,Math.min(title.length(),2)));row.setSelected(chosen);return row;
+            views[0].setText(game.optString("name"));String tags=game.optString("tag");
+            views[1].setText(chosen?"当前选择 · "+GameRules.regionName(c.optString("region")):tags.isEmpty()?GameRules.typeName(type):tags);
+            boolean removable=recent.contains(id);
+            views[2].setText(chosen?"已选":"选择");ui.trailingIcon(views[2],chosen?0:R.drawable.ic_arrow,ui.accent,16);views[2].setVisibility(removable&&!chosen?View.GONE:View.VISIBLE);
+            Button remove=(Button)views[4];remove.setVisibility(removable?View.VISIBLE:View.GONE);
+            remove.setContentDescription("从最近使用中移除"+game.optString("name"));
+            String platform=type;remove.setOnClickListener(v->removeRecentGame(platform,game));
+            View choice=((LinearLayout)wrapper.getChildAt(1)).getChildAt(0);
+            choice.setContentDescription("选择游戏，"+game.optString("name")+(chosen?"，当前已选":""));
+            choice.setOnClickListener(v->chooseGame(game));wrapper.setSelected(chosen);
+            return wrapper;
         }
         @Override public Object[] getSections(){return new String[]{"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"};}
-        @Override public int getPositionForSection(int section){String letter=(String)getSections()[Math.max(0,Math.min(25,section))];for(int i=0;i<items.size();i++)if(items.get(i).optString("pname").compareToIgnoreCase(letter)>=0)return i;return Math.max(0,items.size()-1);}
+        @Override public int getPositionForSection(int section){String letter=(String)getSections()[Math.max(0,Math.min(25,section))];for(int i=0;i<items.size();i++)if(!recent.contains(items.get(i).optString("id"))&&!downloadGames(type).contains(items.get(i).optString("id"))&&items.get(i).optString("pname").compareToIgnoreCase(letter)>=0)return i;return Math.max(0,items.size()-1);}
         @Override public int getSectionForPosition(int position){if(items.isEmpty())return 0;String p=items.get(Math.min(position,items.size()-1)).optString("pname").toUpperCase(Locale.ROOT);return p.isEmpty()?0:Math.max(0,Math.min(25,p.charAt(0)-'A'));}
     }
     private void renderRegions(){
@@ -376,6 +570,9 @@ public final class MainActivity extends Activity {
             JSONObject r=regions.optJSONObject(i);if(r==null)continue;String region=r.optString("region").toLowerCase(Locale.ROOT);
             boolean chosen=current!=null&&selectedGame.optString("id").equals(current.optString("game"))&&region.equalsIgnoreCase(current.optString("region"));
             Button b=ui.button(r.optString("name",GameRules.regionName(region))+(chosen?"  ·  当前":""),false,v->saveChoice(region,detail));
+            b.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);b.setPadding(ui.dp(18),ui.dp(16),ui.dp(18),ui.dp(16));
+            ui.trailingIcon(b,chosen?R.drawable.ic_check:R.drawable.ic_arrow,chosen?ui.accent:ui.muted,20);
+            b.setBackground(ui.states(chosen?ui.tint:ui.surface,ui.tint));
             b.setSelected(chosen);b.setEnabled(!app.commandBusy.get());ui.add(content,b,10);
         }
         String notice=detail.optString("notice");if(!notice.isEmpty())ui.add(content,ui.label(android.text.Html.fromHtml(notice).toString(),13,ui.muted,false),18);
@@ -394,7 +591,7 @@ public final class MainActivity extends Activity {
                 }
             }
             return repo.saveGame(platform,game,region);
-        },result->{config=result;toast("游戏与区服已保存");page="home";showPage();refreshDevices(true);prefetch();});
+        },result->{rememberGame(platform,game.optString("id"));config=result;toast("游戏与区服已保存");page="home";showPage();refreshDevices(true);prefetch();});
         if(active)confirm("修改游戏与区服","此设备类型正在加速。保存将先停止加速，可能使游戏断线。","停止并保存",save);else save.run();
     }
     private <T> void command(Job<T> job,Done<T> done){ command(job,done,null,false); }
@@ -560,12 +757,12 @@ public final class MainActivity extends Activity {
         Uri uri=Uri.parse(link);if(!"https".equals(uri.getScheme())){toast("暂不支持此链接");return;}
         try{startActivity(new Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE));}catch(android.content.ActivityNotFoundException e){toast("未找到可打开链接的浏览器");}
     }
-    private void back(){switch(page){case "home":super.onBackPressed();return;case "mine":navigate("home");return;case "games":query="";navigate("types");return;case "regions":navigate(regionBack);return;case "router":case "notices":navigate("mine");return;default:navigate("home");}}
+    private void back(){switch(page){case "home":super.onBackPressed();return;case "mine":navigate("home");return;case "games":query="";navigate(gamesBack);return;case "regions":navigate(regionBack);return;case "router":case "notices":navigate("mine");return;default:navigate("home");}}
     @Override public void onBackPressed(){back();}
-    @Override protected void onSaveInstanceState(Bundle state){state.putString("page",page);state.putString("type",type);state.putString("query",query);state.putString("deviceQuery",deviceQuery);state.putString("regionBack",regionBack);if(selectedGame!=null)state.putString("selectedGame",selectedGame.toString());super.onSaveInstanceState(state);}
+    @Override protected void onSaveInstanceState(Bundle state){state.putBoolean("favoriteOnly",favoriteOnly);state.putString("gamesBack",gamesBack);state.putString("page",page);state.putString("type",type);state.putString("query",query);state.putString("deviceQuery",deviceQuery);state.putString("regionBack",regionBack);if(selectedGame!=null)state.putString("selectedGame",selectedGame.toString());super.onSaveInstanceState(state);}
     @Override protected void onResume(){super.onResume();resumed=true;handler.removeCallbacks(poll);handler.postDelayed(poll,1500);handler.removeCallbacks(ticker);handler.post(ticker);}
     @Override protected void onPause(){resumed=false;handler.removeCallbacks(poll);handler.removeCallbacks(ticker);super.onPause();}
-    @Override protected void onDestroy(){destroyed=true;handler.removeCallbacksAndMessages(null);super.onDestroy();}
+    @Override protected void onDestroy(){destroyed=true;if(deviceMenu!=null)deviceMenu.dismiss();handler.removeCallbacksAndMessages(null);super.onDestroy();}
     private static final class CookieManagerCompat {
         static void clear(){android.webkit.CookieManager.getInstance().removeAllCookies(null);android.webkit.CookieManager.getInstance().flush();android.webkit.WebStorage.getInstance().deleteAllData();}
     }
