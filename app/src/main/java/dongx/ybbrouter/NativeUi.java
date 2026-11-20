@@ -106,6 +106,18 @@ final class NativeUi {
         });
         return row;
     }
+    LinearLayout settingsRow(String title, int resource, View.OnClickListener action) {
+        Button button = button(title, false, action);button.setTextSize(15);button.setTextColor(text);
+        button.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);button.setPadding(dp(16),dp(14),dp(16),dp(14));
+        button.setMinimumHeight(dp(60));button.setCompoundDrawablePadding(dp(14));
+        button.setCompoundDrawablesRelative(icon(resource,accent,22),null,null,null);
+        trailingIcon(button,R.drawable.ic_arrow,muted,18);
+        LinearLayout row=column();add(row,button,0);return row;
+    }
+    void divider(LinearLayout parent, int inset) {
+        View lineView=new View(context);lineView.setBackgroundColor(line);
+        LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,dp(1));params.setMargins(dp(inset),0,dp(16),0);parent.addView(lineView,params);
+    }
     EditText search(String hint) {
         EditText v = new EditText(context); v.setSingleLine(true); v.setTextSize(16); v.setTextColor(text); v.setHintTextColor(muted); v.setHint(hint);
         GradientDrawable background = shape(surface, 12); background.setStroke(dp(1), line);

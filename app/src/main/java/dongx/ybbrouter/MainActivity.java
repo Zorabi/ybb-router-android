@@ -693,29 +693,75 @@ public final class MainActivity extends Activity {
         }
     }
     private void renderMine(){
-        if(!"mine".equals(page))return;screenStatus.setText("游帮帮路由助手 · 原生版 0.2.1");LinearLayout content=scrollBody();
-        JSONObject user=Repository.object(repo.cached("user"));LinearLayout profile=ui.card();
-        ui.add(profile,ui.label(user.optString("nick_name","游帮帮账号"),23,ui.text,true),0);
-        JSONArray goods=Repository.array(repo.cached("goods"));String member="尚未开通全平台会员";
-        long now=System.currentTimeMillis()/1000;for(int i=0;i<goods.length();i++){
-            JSONObject item=goods.optJSONObject(i);if(item!=null&&item.optInt("spu")==3){long end=item.optLong("end_time");member=end>now?"全平台会员 · "+new SimpleDateFormat("yyyy.MM.dd",Locale.CHINA).format(new Date(end*1000))+" 到期":"全平台会员已到期";}
+        if(!"mine".equals(page))return;
+        screenStatus.setVisibility(View.GONE);LinearLayout content=scrollBody();
+        JSONObject user=Repository.object(repo.cached("user"));
+        String nickname=user.optString("nick_name");if(nickname.isEmpty())nickname="游帮帮账号";
+        LinearLayout profile=ui.row();profile.setPadding(ui.dp(4),ui.dp(4),ui.dp(4),ui.dp(4));
+        ImageView avatar=ui.symbol(R.drawable.ic_user,ui.accent,ui.tint);avatar.setPadding(ui.dp(12),ui.dp(12),ui.dp(12),ui.dp(12));
+        avatar.setBackground(ui.shape(ui.tint,30));profile.addView(avatar,new LinearLayout.LayoutParams(ui.dp(48),ui.dp(48)));
+        LinearLayout account=ui.column();account.setPadding(ui.dp(16),0,0,0);
+        TextView name=ui.label(nickname,23,ui.text,true);name.setMaxLines(2);name.setEllipsize(android.text.TextUtils.TruncateAt.END);ui.add(account,name,0);
+        ui.add(account,ui.label("百度账号 · 游帮帮服务",12,ui.muted,false),8);
+        profile.addView(account,new LinearLayout.LayoutParams(0,-2,1));ui.add(content,profile,0);
+
+        JSONArray goods=Repository.array(repo.cached("goods"));
+        String memberState=repo.cached("goods")==null?"正在获取会员状态":"尚未开通";
+        String memberDetail="需使用支持路由器的全平台会员";boolean active=false;
+        long now=System.currentTimeMillis()/1000;
+        for(int i=0;i<goods.length();i++){
+            JSONObject item=goods.optJSONObject(i);if(item==null||item.optInt("spu")!=3)continue;
+            long end=item.optLong("end_time");active=end>now;memberState=active?"会员有效":"会员已到期";
+            memberDetail=end>0?new SimpleDateFormat("yyyy.MM.dd",Locale.CHINA).format(new Date(end*1000))+ (active?" 到期":" 已到期"):"请在官方客户端查看会员信息";
         }
-        ui.add(profile,ui.label(member,14,ui.muted,false),12);
-        ui.add(profile,ui.button("续费 / 开通",false,v->new AlertDialog.Builder(this).setTitle("全平台会员").setMessage("与官方插件一致，开通或续费需在游帮帮官方客户端完成。请选择支持路由器加速的全平台会员。").setNegativeButton("关闭",null).setPositiveButton("打开官方网站",(d,w)->external("https://ybb.baidu.com/")).show()),18);
-        ui.add(content,profile,0);
+        LinearLayout member=ui.card();
+        android.graphics.drawable.GradientDrawable membershipBackground=new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                new int[]{ui.hero,NativeUi.c(ui.dark?"#1D2E50":"#183C9D")});
+        membershipBackground.setCornerRadius(ui.dp(20));member.setBackground(membershipBackground);
+        LinearLayout membershipTitle=ui.row();
+        ImageView star=ui.symbol(R.drawable.ic_star,NativeUi.c("#D5E3FF"),android.graphics.Color.TRANSPARENT);star.setPadding(0,0,0,0);
+        membershipTitle.addView(star,new LinearLayout.LayoutParams(ui.dp(20),ui.dp(20)));
+        TextView title=ui.label("全平台会员",20,android.graphics.Color.WHITE,true);title.setPadding(ui.dp(8),0,ui.dp(8),0);
+        membershipTitle.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+        String badge=active?"有效":memberState.equals("会员已到期")?"已到期":memberState.equals("尚未开通")?"未开通":"获取中";
+        TextView status=ui.label(badge,12,NativeUi.c("#E2EAFF"),true);status.setPadding(ui.dp(10),ui.dp(5),ui.dp(10),ui.dp(5));
+        status.setBackground(ui.shape(NativeUi.c(ui.dark?"#354B72":"#3C5DB9"),8));membershipTitle.addView(status);
+        ui.add(member,membershipTitle,0);
+        LinearLayout membershipAction=ui.row();
+        TextView official=ui.label(memberDetail,12,NativeUi.c("#D5E3FF"),false);
+        membershipAction.addView(official,new LinearLayout.LayoutParams(0,-2,1));
+        Button renew=ui.button(active?"续费会员":"了解会员",false,v->membershipHelp());
+        renew.setTextSize(13);renew.setLineSpacing(0,1);
+        renew.setIncludeFontPadding(false);renew.setGravity(Gravity.CENTER);
+        renew.setTextColor(NativeUi.c("#183C9D"));
+        renew.setBackground(new android.graphics.drawable.InsetDrawable(ui.states(NativeUi.c("#ECF2FF"),NativeUi.c("#CDDEFF")),0,ui.dp(9),0,ui.dp(9)));
+        renew.setPadding(ui.dp(20),0,ui.dp(20),0);
+        membershipAction.addView(renew);ui.add(member,membershipAction,10);ui.add(content,member,16);
+
         JSONArray offers=Repository.array(repo.cached("offers"));
         for(int i=0;i<offers.length();i++){
             JSONObject offer=offers.optJSONObject(i);if(offer==null||!offer.has("id"))continue;
-            String id=offer.optString("id");ui.add(content,ui.button("领取账号可用的会员权益",false,v->confirm("领取会员权益","以官方接口返回的当前活动规则和领取结果为准。","确认领取",()->command(()->repo.api.request("PATCH","client/pop/"+Uri.encode(id),null),result->{toast("会员权益已领取");loadMine(true);}))),12);
+            String id=offer.optString("id");
+            LinearLayout benefit=ui.card();benefit.setPadding(ui.dp(4),ui.dp(4),ui.dp(4),ui.dp(4));
+            ui.add(benefit,ui.settingsRow("领取可用会员权益",R.drawable.ic_star,v->confirm("领取会员权益","以官方接口返回的当前活动规则和领取结果为准。","确认领取",()->command(()->repo.api.request("PATCH","client/pop/"+Uri.encode(id),null),result->{toast("会员权益已领取");loadMine(true);}))),0);
+            ui.add(content,benefit,12);
         }
-        LinearLayout settings=ui.card();ui.add(settings,ui.button("路由器管理",false,v->navigate("router")),0);
-        ui.add(settings,ui.button("服务公告",false,v->navigate("notices")),8);
-        ui.add(settings,ui.button("帮助与反馈",false,v->help()),8);
-        ui.add(settings,ui.label("路由插件版本  "+deviceData.optString("version","未知"),13,ui.muted,false),20);ui.add(content,settings,18);
-        ui.add(content,ui.button("退出登录",false,v->confirm("退出登录","退出此应用的账号。路由器绑定关系将保留。","退出登录",()->command(()->{
+        ui.add(content,ui.label("设备与支持",13,ui.muted,true),16);
+        LinearLayout settings=ui.card();settings.setPadding(ui.dp(4),ui.dp(4),ui.dp(4),ui.dp(4));
+        ui.add(settings,ui.settingsRow("路由器管理",R.drawable.ic_router,v->navigate("router")),0);ui.divider(settings,52);
+        ui.add(settings,ui.settingsRow("服务公告",R.drawable.ic_notice,v->navigate("notices")),0);ui.divider(settings,52);
+        ui.add(settings,ui.settingsRow("帮助与反馈",R.drawable.ic_help,v->help()),0);ui.add(content,settings,10);
+
+        Button logout=ui.button("退出登录",false,v->confirm("退出登录","退出此应用的账号。路由器绑定关系将保留。","退出登录",()->command(()->{
             repo.api.request("GET","user/logout",null);repo.clear();return true;
-        },value->{CookieManagerCompat.clear();config=new JSONObject();deviceData=new JSONObject();routers=new JSONArray();loginRequired=true;page="home";showPage();}))),18);
-        ui.add(content,ui.label("非官方客户端 · 管理功能由游帮帮服务提供\nCopyright (c) 2026 dongx · AGPL-3.0-only",12,ui.muted,false),24);
+        },value->{CookieManagerCompat.clear();config=new JSONObject();deviceData=new JSONObject();routers=new JSONArray();loginRequired=true;page="home";showPage();})));
+        logout.setTextColor(ui.danger);logout.setBackground(ui.states(ui.surface,ui.soft));ui.add(content,logout,16);
+        TextView footer=ui.label("游帮帮路由助手 0.2.1 · 非官方客户端\n路由插件 "+deviceData.optString("version","未知")+"\nCopyright (c) 2026 dongx · AGPL-3.0-only",11,ui.muted,false);footer.setGravity(Gravity.CENTER);ui.add(content,footer,12);
+    }
+    private void membershipHelp(){
+        new AlertDialog.Builder(this).setTitle("全平台会员").setMessage("开通或续费需在游帮帮官方客户端完成。请选择支持路由器加速的全平台会员。")
+                .setNegativeButton("关闭",null).setPositiveButton("打开官方网站",(d,w)->external("https://ybb.baidu.com/")).show();
     }
     private void renderRouter(){
         screenStatus.setText("百度账号与路由器的绑定关系");LinearLayout content=scrollBody();LinearLayout card=ui.card();
