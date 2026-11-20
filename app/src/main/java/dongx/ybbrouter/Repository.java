@@ -40,11 +40,14 @@ final class Repository {
         if (epoch != generation) throw new ApiClient.Failure(10001, "登录状态已变化");
         // User info includes unrelated server credentials. Cache only display fields.
         if ("user".equals(key)) {
-            JSONObject user = data.getJSONObject("result");
+            JSONObject user = data.optJSONObject("result");
+            if (user == null) user = new JSONObject();
             data.put("result", new JSONObject().put("nick_name", user.optString("nick_name")).put("avatar", user.optString("avatar")));
         }
         if (key.startsWith("games_")) {
-            JSONArray source = data.getJSONArray("result"), compact = new JSONArray();
+            JSONArray source = data.optJSONArray("result");
+            if (source == null) source = new JSONArray();
+            JSONArray compact = new JSONArray();
             String[] fields = {"id", "name", "ename", "pname", "tag", "routeOption", "exeName", "sort"};
             for (int i = 0; i < source.length(); i++) {
                 JSONObject game = source.getJSONObject(i), item = new JSONObject();
@@ -54,7 +57,9 @@ final class Repository {
             data.put("result", compact);
         }
         if (key.startsWith("regions_")) {
-            JSONObject source = data.getJSONObject("result"), compact = new JSONObject();
+            JSONObject source = data.optJSONObject("result");
+            if (source == null) source = new JSONObject();
+            JSONObject compact = new JSONObject();
             for (String field : new String[]{"region_list", "notice", "name", "routeOption"}) if (source.has(field)) compact.put(field, source.get(field));
             data.put("result", compact);
         }
@@ -64,18 +69,23 @@ final class Repository {
         }
         return data;
     }
-    JSONObject fetchConfig() throws Exception { return fetch("config", "router/config/game").getJSONObject("result"); }
+    JSONObject fetchConfig() throws Exception {
+        JSONObject data = fetch("config", "router/config/game");
+        // Server returns result:null when no game config has ever been saved; start from empty.
+        if (data.optJSONObject("result") == null) android.util.Log.w("YbbApi", "router/config/game returned empty result");
+        return object(data);
+    }
     JSONObject saveGame(String type, JSONObject game, String region) throws Exception {
         synchronized (configLock) {
             JSONObject latest = fetchConfig(); JSONObject merged = GameRules.withGame(latest, type, game, region);
-            api.request("POST", "router/config/game", merged);
+            api.request("POST", "router/config/game", new JSONObject().put("type", "game").put("content", merged));
             save("config", new JSONObject().put("result", merged)); return merged;
         }
     }
     JSONObject saveDeviceType(String mac, String type) throws Exception {
         synchronized (configLock) {
             JSONObject merged = GameRules.withDeviceType(fetchConfig(), mac, type);
-            api.request("POST", "router/config/game", merged);
+            api.request("POST", "router/config/game", new JSONObject().put("type", "game").put("content", merged));
             save("config", new JSONObject().put("result", merged)); return merged;
         }
     }

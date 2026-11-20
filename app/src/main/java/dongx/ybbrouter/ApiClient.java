@@ -72,18 +72,24 @@ final class ApiClient {
         try {
             if (body != null) {
                 byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+                if (path.startsWith("router/")) android.util.Log.i("YbbApi", method+" "+path+" body: "+body);
                 connection.setDoOutput(true); connection.setFixedLengthStreamingMode(bytes.length);
                 try (java.io.OutputStream out = connection.getOutputStream()) { out.write(bytes); }
             }
             int status = connection.getResponseCode();
             if (status == 401 || status == 403) throw new Failure(10001, "登录已过期，请重新登录");
             if (status < 200 || status >= 300) throw new Failure(status, "服务暂时不可用（"+status+"），请稍后重试");
+            String text;
+            try (InputStream in = connection.getInputStream()) { text = new String(read(in), StandardCharsets.UTF_8); }
             JSONObject response;
-            try (InputStream in = connection.getInputStream()) { response = new JSONObject(new String(read(in), StandardCharsets.UTF_8)); }
+            try { response = new JSONObject(text); }
+            catch (org.json.JSONException e) { android.util.Log.w("YbbApi", method+" "+path+" non-json ("+status+"): "+text.substring(0, Math.min(400, text.length()))); throw e; }
             if (!response.optBoolean("success")) {
                 JSONObject error = response.optJSONObject("errors");
+                android.util.Log.w("YbbApi", method+" "+path+" rejected: "+response);
                 throw new Failure(error == null ? -1 : error.optInt("code", -1), error == null ? "请求失败，请稍后重试" : error.optString("message_cn", "请求失败，请稍后重试"));
             }
+            android.util.Log.i("YbbApi", method+" "+path+" ok ("+status+")");
             return response;
         } finally { connection.disconnect(); }
     }

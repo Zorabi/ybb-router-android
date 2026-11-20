@@ -567,7 +567,7 @@ public final class MainActivity extends Activity {
         screenStatus.setText("选择区服后生效，同一设备类型共用配置");
         JSONObject current=config.optJSONObject(type);
         for(int i=0;i<regions.length();i++){
-            JSONObject r=regions.optJSONObject(i);if(r==null)continue;String region=r.optString("region").toLowerCase(Locale.ROOT);
+            JSONObject r=regions.optJSONObject(i);if(r==null)continue;String region=r.optString("region");
             boolean chosen=current!=null&&selectedGame.optString("id").equals(current.optString("game"))&&region.equalsIgnoreCase(current.optString("region"));
             Button b=ui.button(r.optString("name",GameRules.regionName(region))+(chosen?"  ·  当前":""),false,v->saveChoice(region,detail));
             b.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);b.setPadding(ui.dp(18),ui.dp(16),ui.dp(18),ui.dp(16));
@@ -757,7 +757,7 @@ public final class MainActivity extends Activity {
             repo.api.request("GET","user/logout",null);repo.clear();return true;
         },value->{CookieManagerCompat.clear();config=new JSONObject();deviceData=new JSONObject();routers=new JSONArray();loginRequired=true;page="home";showPage();})));
         logout.setTextColor(ui.danger);logout.setBackground(ui.states(ui.surface,ui.soft));ui.add(content,logout,16);
-        TextView footer=ui.label("游帮帮路由助手 0.2.1 · 非官方客户端\n路由插件 "+deviceData.optString("version","未知")+"\nCopyright (c) 2026 dongx · AGPL-3.0-only",11,ui.muted,false);footer.setGravity(Gravity.CENTER);ui.add(content,footer,12);
+        TextView footer=ui.label("游帮帮路由助手 0.2.2 · 非官方客户端\n路由插件 "+deviceData.optString("version","未知")+"\nCopyright (c) 2026 dongx · AGPL-3.0-only",11,ui.muted,false);footer.setGravity(Gravity.CENTER);ui.add(content,footer,12);
     }
     private void membershipHelp(){
         new AlertDialog.Builder(this).setTitle("全平台会员").setMessage("开通或续费需在游帮帮官方客户端完成。请选择支持路由器加速的全平台会员。")

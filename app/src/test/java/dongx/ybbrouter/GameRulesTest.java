@@ -13,7 +13,7 @@ public class GameRulesTest {
         assertEquals("P1",saved.getJSONObject("ps5").getString("game"));
         assertTrue(saved.getBoolean("future_flag"));
         assertEquals("ps5",saved.getJSONObject("device_type").getString("mac"));
-        assertEquals("hk",saved.getJSONObject("android").getString("region"));
+        assertEquals("HK",saved.getJSONObject("android").getString("region"));
         assertEquals("new.pkg",saved.getJSONObject("android").getString("exeName"));
         assertEquals("C1",original.getJSONObject("android").getString("game"));
     }
@@ -46,7 +46,7 @@ public class GameRulesTest {
     @Test public void startMessageTargetsOnlySelectedDeviceAndIncludesRouteAndPackage() throws Exception {
         JSONObject d=new JSONObject().put("ip","192.168.31.22");JSONObject choice=new JSONObject().put("game","C0023").put("region","JP").put("routeOption","CN").put("exeName","com.example.game");
         JSONObject msg=GameRules.startMessage(d,choice);
-        assertEquals("192.168.31.22",msg.getString("ip"));assertEquals("C0023",msg.getString("game_id"));assertEquals("jp",msg.getString("region"));assertEquals("CN",msg.getString("routeOption"));assertEquals("com.example.game",msg.getString("package_name"));
+        assertEquals("192.168.31.22",msg.getString("ip"));assertEquals("C0023",msg.getString("game_id"));assertEquals("JP",msg.getString("region"));assertEquals("CN",msg.getString("routeOption"));assertEquals("com.example.game",msg.getString("package_name"));
     }
     @Test(expected=org.json.JSONException.class) public void missingGameCannotSendStartCommand() throws Exception {
         GameRules.startMessage(new JSONObject().put("ip","192.168.31.22"),new JSONObject());

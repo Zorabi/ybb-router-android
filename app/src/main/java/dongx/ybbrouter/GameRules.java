@@ -78,7 +78,7 @@ public final class GameRules {
         JSONObject choice = previous == null ? new JSONObject() : copy(previous);
         choice.put("game", game.getString("id"));
         choice.put("name", game.getString("name"));
-        choice.put("region", region.toLowerCase(Locale.ROOT));
+        choice.put("region", region);
         choice.remove("regionName"); choice.remove("pic");
         if (game.has("routeOption")) choice.put("routeOption", game.get("routeOption"));
         else choice.remove("routeOption");
@@ -113,7 +113,7 @@ public final class GameRules {
     public static JSONObject startMessage(JSONObject device, JSONObject selection) throws JSONException {
         if (device.optString("ip").isEmpty() || selection.optString("game").isEmpty()) throw new JSONException("请先选择设备和游戏");
         JSONObject msg = new JSONObject().put("ip", device.getString("ip")).put("game_id", selection.getString("game"))
-                .put("region", selection.optString("region", "auto").toLowerCase(Locale.ROOT));
+                .put("region", selection.optString("region", "auto"));
         if (selection.has("routeOption")) msg.put("routeOption", selection.get("routeOption"));
         if (selection.has("exeName")) msg.put("package_name", selection.get("exeName"));
         return msg;
