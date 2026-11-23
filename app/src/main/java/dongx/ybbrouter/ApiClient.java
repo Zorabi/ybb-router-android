@@ -72,7 +72,6 @@ final class ApiClient {
         try {
             if (body != null) {
                 byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
-                if (path.startsWith("router/")) android.util.Log.i("YbbApi", method+" "+path+" body: "+body);
                 connection.setDoOutput(true); connection.setFixedLengthStreamingMode(bytes.length);
                 try (java.io.OutputStream out = connection.getOutputStream()) { out.write(bytes); }
             }
@@ -83,15 +82,22 @@ final class ApiClient {
             try (InputStream in = connection.getInputStream()) { text = new String(read(in), StandardCharsets.UTF_8); }
             JSONObject response;
             try { response = new JSONObject(text); }
-            catch (org.json.JSONException e) { android.util.Log.w("YbbApi", method+" "+path+" non-json ("+status+"): "+text.substring(0, Math.min(400, text.length()))); throw e; }
+            catch (org.json.JSONException e) { android.util.Log.w("YbbApi", method+" "+logRoute(path)+" non-json HTTP "+status); throw e; }
             if (!response.optBoolean("success")) {
                 JSONObject error = response.optJSONObject("errors");
-                android.util.Log.w("YbbApi", method+" "+path+" rejected: "+response);
+                android.util.Log.w("YbbApi", method+" "+logRoute(path)+" rejected code="+(error==null?-1:error.optInt("code",-1)));
                 throw new Failure(error == null ? -1 : error.optInt("code", -1), error == null ? "请求失败，请稍后重试" : error.optString("message_cn", "请求失败，请稍后重试"));
             }
-            android.util.Log.i("YbbApi", method+" "+path+" ok ("+status+")");
+            if (android.util.Log.isLoggable("YbbApi", android.util.Log.DEBUG))
+                android.util.Log.d("YbbApi", method+" "+logRoute(path)+" HTTP "+status);
             return response;
         } finally { connection.disconnect(); }
+    }
+    static String logRoute(String path) {
+        String route=path.split("\\?",2)[0];
+        for(String prefix:new String[]{"router/unbind/","client/pop/"})
+            if(route.startsWith(prefix))return prefix+":id";
+        return route;
     }
     static byte[] read(InputStream in) throws java.io.IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] buffer = new byte[8192]; int n;
