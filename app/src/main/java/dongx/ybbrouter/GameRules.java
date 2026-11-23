@@ -121,6 +121,32 @@ public final class GameRules {
         }
         return out;
     }
+    public static List<JSONObject> quickGames(JSONArray source,List<String> recent,JSONObject current,int limit) throws JSONException {
+        java.util.Map<String,JSONObject> byId=new java.util.HashMap<>();
+        for(JSONObject game:games(source,""))byId.put(game.optString("id"),game);
+        if(current!=null&&!current.optString("game").isEmpty()&&!byId.containsKey(current.optString("game"))){
+            JSONObject game=copy(current);game.put("id",current.optString("game"));byId.put(game.optString("id"),game);
+        }
+        ArrayList<JSONObject> result=new ArrayList<>();java.util.Set<String> added=new java.util.HashSet<>();
+        for(String id:recent){
+            if(result.size()>=limit)break;
+            if(byId.containsKey(id)&&added.add(id))result.add(byId.get(id));
+        }
+        return result;
+    }
+    public static List<JSONObject> regionsWithPreferred(JSONArray source, String preferred) {
+        ArrayList<JSONObject> result=new ArrayList<>();
+        for(int i=0;i<source.length();i++){
+            JSONObject region=source.optJSONObject(i);
+            if(region!=null&&!region.optString("region").isEmpty())result.add(region);
+        }
+        java.util.Collections.sort(result,(a,b)->Boolean.compare(preferred.equalsIgnoreCase(b.optString("region")),preferred.equalsIgnoreCase(a.optString("region"))));
+        return result;
+    }
+    public static boolean sameSelection(JSONObject choice,JSONObject game,String region){
+        return choice!=null&&!game.optString("id").isEmpty()&&game.optString("id").equals(choice.optString("game"))
+                &&!region.isEmpty()&&region.equalsIgnoreCase(choice.optString("region"));
+    }
     public static JSONObject startMessage(JSONObject device, JSONObject selection) throws JSONException {
         if (device.optString("ip").isEmpty() || selection.optString("game").isEmpty()) throw new JSONException("请先选择设备和游戏");
         JSONObject msg = new JSONObject().put("ip", device.getString("ip")).put("game_id", selection.getString("game"))

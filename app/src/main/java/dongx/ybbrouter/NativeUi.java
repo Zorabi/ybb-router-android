@@ -82,6 +82,16 @@ final class NativeUi {
         image.setBackground(shape(background, 14));
         image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO); return image;
     }
+    int deviceIcon(String type) {
+        switch(type){
+            case "android":case "ios":return R.drawable.ic_phone;
+            case "switch":return R.drawable.ic_handheld;
+            case "ps":case "ps5":case "xbox":case "xbox_x":case "xbox_s":return R.drawable.ic_console;
+            case "mac":return R.drawable.ic_laptop;
+            case "oculus":return R.drawable.ic_vr;
+            default:return R.drawable.ic_device;
+        }
+    }
     Button navigation(String title, int resource, boolean selected, View.OnClickListener action) {
         Button button = button(title, false, action); button.setTextSize(12);
         button.setCompoundDrawables(null, icon(resource, selected ? accent : muted, 22), null, null);

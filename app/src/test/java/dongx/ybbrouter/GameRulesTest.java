@@ -80,4 +80,31 @@ public class GameRulesTest {
         String started=GameRules.deviceDisplaySignature(devices,config);
         config.put("device_type",new JSONObject().put("a","windows"));assertNotEquals(started,GameRules.deviceDisplaySignature(devices,config));
     }
+    @Test public void previousRegionIsFirstWithoutChangingServerCodesOrSource() throws Exception {
+        JSONObject hk=new JSONObject().put("region","HK"),jp=new JSONObject().put("region","JP");
+        JSONArray source=new JSONArray().put(hk).put(jp);
+        java.util.List<JSONObject> ordered=GameRules.regionsWithPreferred(source,"jp");
+        assertSame(jp,ordered.get(0));assertEquals("JP",ordered.get(0).getString("region"));assertSame(hk,source.getJSONObject(0));
+    }
+    @Test public void unavailableRegionKeepsValidServerChoicesInOriginalOrder() throws Exception {
+        JSONObject hk=new JSONObject().put("region","HK"),jp=new JSONObject().put("region","JP");
+        JSONArray source=new JSONArray().put(hk).put(JSONObject.NULL).put(new JSONObject()).put(jp);
+        java.util.List<JSONObject> ordered=GameRules.regionsWithPreferred(source,"US");
+        assertEquals(2,ordered.size());assertSame(hk,ordered.get(0));assertSame(jp,ordered.get(1));
+    }
+    @Test public void quickGamesFollowRecentOrderAndLimitWithoutDuplicates() throws Exception {
+        JSONArray catalog=new JSONArray();for(String id:new String[]{"A","B","C","D"})catalog.put(new JSONObject().put("id",id).put("name",id));
+        java.util.List<JSONObject> quick=GameRules.quickGames(catalog,java.util.Arrays.asList("C","C","missing","A","D","B"),null,3);
+        assertEquals(3,quick.size());assertEquals("C",quick.get(0).getString("id"));assertEquals("A",quick.get(1).getString("id"));assertEquals("D",quick.get(2).getString("id"));
+    }
+    @Test public void quickGamesCanUseCurrentSelectionButDoNotReinsertRemovedIds() throws Exception {
+        JSONObject current=new JSONObject().put("game","A").put("name","游戏 A");
+        assertEquals(1,GameRules.quickGames(new JSONArray(),java.util.Collections.singletonList("A"),current,3).size());
+        assertTrue(GameRules.quickGames(new JSONArray(),java.util.Collections.emptyList(),current,3).isEmpty());assertFalse(current.has("id"));
+    }
+    @Test public void unchangedSelectionAcceptsCodeCaseButRejectsMissingValues() throws Exception {
+        JSONObject choice=new JSONObject().put("game","A").put("region","JP"),game=new JSONObject().put("id","A");
+        assertTrue(GameRules.sameSelection(choice,game,"jp"));assertFalse(GameRules.sameSelection(choice,game,"HK"));assertFalse(GameRules.sameSelection(null,game,"JP"));
+        assertFalse(GameRules.sameSelection(new JSONObject(),new JSONObject(),""));
+    }
 }
