@@ -14,7 +14,10 @@ public final class RouterApplication extends Application {
     final AtomicBoolean commandBusy = new AtomicBoolean();
     volatile String workingIp = "";
     volatile boolean workingStart;
-    volatile String pendingIp = "";
+    volatile String workingStage = "";
+    final AccelerationQueue switches = new AccelerationQueue();
+    volatile String switchError = "";
+    volatile String pendingIp = "", pendingMac = "", pendingRouter = "";
     volatile boolean pendingStart;
     volatile long pendingUntil;
     @Override public void onCreate() { super.onCreate(); repository = new Repository(this); }
