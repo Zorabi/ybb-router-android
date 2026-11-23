@@ -6,3 +6,8 @@
 *.keystore
 
 .DS_Store
+
+/signing.properties
+/signing-*.properties
+*.p12
+*.pfx

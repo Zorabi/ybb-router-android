@@ -1,0 +1,6 @@
+# Copy to a private location, then set YBB_SIGNING_PROPERTIES to its absolute path.
+# Use the same key on every build machine. Never commit real passwords or keys.
+storeFile=/absolute/path/to/signing.p12
+storePassword=replace-with-private-password
+keyAlias=ybbrouter
+keyPassword=replace-with-private-password

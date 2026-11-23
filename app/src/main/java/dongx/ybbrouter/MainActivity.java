@@ -766,7 +766,7 @@ public final class MainActivity extends Activity {
             repo.api.request("GET","user/logout",null);repo.clear();return true;
         },value->{CookieManagerCompat.clear();config=new JSONObject();deviceData=new JSONObject();routers=new JSONArray();loginRequired=true;page="home";showPage();})));
         logout.setTextColor(ui.danger);logout.setBackground(ui.states(ui.surface,ui.soft));ui.add(content,logout,16);
-        TextView footer=ui.label("游帮帮路由助手 0.2.2 · 非官方客户端\n路由插件 "+deviceData.optString("version","未知")+"\nCopyright (c) 2026 dongx · AGPL-3.0-only",11,ui.muted,false);footer.setGravity(Gravity.CENTER);ui.add(content,footer,12);
+        TextView footer=ui.label("游帮帮路由助手 0.3.0 · 非官方客户端\n路由插件 "+deviceData.optString("version","未知")+"\nCopyright (c) 2026 dongx · AGPL-3.0-only",11,ui.muted,false);footer.setGravity(Gravity.CENTER);ui.add(content,footer,12);
     }
     private void membershipHelp(){
         new AlertDialog.Builder(this).setTitle("全平台会员").setMessage("开通或续费需在游帮帮官方客户端完成。请选择支持路由器加速的全平台会员。")

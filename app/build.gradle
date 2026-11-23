@@ -1,4 +1,15 @@
 plugins { id 'com.android.application' }
+
+def signingFile = file(System.getenv('YBB_SIGNING_PROPERTIES') ?: "${System.getProperty('user.home')}/.config/ybb-router/signing.properties")
+def signingProperties = new Properties()
+if (signingFile.isFile()) signingFile.withInputStream { signingProperties.load(it) }
+def stableSigning = signingFile.isFile()
+if (stableSigning) {
+    ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].each {
+        if (!signingProperties.getProperty(it)) throw new GradleException("签名配置缺少 ${it}")
+    }
+    if (!file(signingProperties.getProperty('storeFile')).isFile()) throw new GradleException('签名密钥文件不存在')
+}
 android {
     namespace 'dongx.ybbrouter'
     compileSdk 35
@@ -8,10 +19,28 @@ android {
         applicationId 'dongx.ybbrouter'
         minSdk 23
         targetSdk 34
-        versionCode 4
-        versionName '0.2.2'
+        versionCode 5
+        versionName '0.3.0'
     }
-    buildTypes { release { minifyEnabled false } }
+    signingConfigs {
+        if (stableSigning) {
+            stable {
+                storeFile file(signingProperties.getProperty('storeFile'))
+                storePassword signingProperties.getProperty('storePassword')
+                keyAlias signingProperties.getProperty('keyAlias')
+                keyPassword signingProperties.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        debug { if (stableSigning) signingConfig signingConfigs.stable }
+        release { minifyEnabled false; if (stableSigning) signingConfig signingConfigs.stable }
+    }
 }
-
+// Never silently package an app using a newly generated, incompatible debug certificate.
+gradle.taskGraph.whenReady { graph ->
+    if (!stableSigning && graph.allTasks.any { it.project == project && it.name in ['packageDebug', 'packageRelease', 'bundleDebug', 'bundleRelease'] }) {
+        throw new GradleException('打包前请配置固定签名：参见 docs/SIGNING.md；测试和静态检查无需签名。')
+    }
+}
 dependencies { testImplementation "junit:junit:4.13.2"; testImplementation "org.json:json:20240303" }
