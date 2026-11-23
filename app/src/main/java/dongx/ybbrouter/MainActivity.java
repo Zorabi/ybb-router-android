@@ -429,11 +429,73 @@ public final class MainActivity extends Activity {
         ui.add(content,kind,0);
         menu.showAsDropDown(anchor,anchor.getWidth()-width,ui.dp(6));
     }
+    private void backupOptions(){
+        new AlertDialog.Builder(this).setTitle("备份与恢复").setItems(new String[]{"导出常用记录","从文件恢复"},(dialog,which)->{
+            Intent intent=new Intent(which==0?Intent.ACTION_CREATE_DOCUMENT:Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType(which==0?"application/json":"*/*");
+            if(which==0)intent.putExtra(Intent.EXTRA_TITLE,"ybb-preferences-"+new SimpleDateFormat("yyyyMMdd",Locale.CHINA).format(new Date())+".json");
+            try{startActivityForResult(intent,which==0?101:102);}catch(android.content.ActivityNotFoundException e){toast("系统文件选择器不可用");}
+        }).setNegativeButton("关闭",null).show();
+    }
+    private <T> void fileTask(Job<T> job, Done<T> done){
+        int epoch=repo.epoch();
+        app.network.execute(()->{
+            try{T value=job.run();handler.post(()->{if(!destroyed&&epoch==repo.epoch())done.accept(value);});}
+            catch(Exception error){handler.post(()->{if(!destroyed)toast(error.getMessage()==null?"文件操作失败，请重试":error.getMessage());});}
+        });
+    }
+    private void backupResult(int request,Intent data){
+        if(data==null||data.getData()==null)return;Uri uri=data.getData();
+        if(request==101){
+            final JSONObject document;
+            try{document=PreferenceBackup.export(shortcuts.getAll());}catch(Exception e){toast(e.getMessage());return;}
+            fileTask(()->{
+                try(java.io.OutputStream out=getContentResolver().openOutputStream(uri,"wt")){
+                    if(out==null)throw new java.io.IOException("无法创建备份文件");
+                    out.write(document.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }return true;
+            },value->toast("常用记录已导出，不含登录信息"));
+        }else{
+            fileTask(()->{
+                Map<String,Object> entries;
+                try(java.io.InputStream in=getContentResolver().openInputStream(uri)){entries=PreferenceBackup.parse(PreferenceBackup.read(in));}
+                return PreferenceBackup.preview(entries,shortcuts.getAll());
+            },this::showRestorePlan);
+        }
+    }
+    private void showRestorePlan(PreferenceBackup.RestorePlan plan){
+        String summary="备份包含 "+plan.devices+" 条常用设备记录、"+plan.games+" 款最近游戏，另有 "+plan.aliases+" 个别名、"+plan.regions+" 条区服偏好。";
+        if(plan.conflicts.isEmpty()){
+            confirm("恢复预览",summary+"\n将合并新记录，不更改账号、路由器绑定或加速配置。","合并恢复",()->applyRestorePlan(plan,Collections.emptySet()));return;
+        }
+        LinearLayout title=ui.column();title.setPadding(ui.dp(24),ui.dp(20),ui.dp(24),ui.dp(12));
+        ui.add(title,ui.label("选择冲突记录",19,ui.text,true),0);ui.add(title,ui.label(summary,13,ui.muted,false),10);
+        ui.add(title,ui.label("以下记录与本机不同。勾选采用备份，未勾选的设备或平台保留本机整组记录；其他新记录正常合并。",13,ui.muted,false),10);
+        String[] labels=new String[plan.conflicts.size()];boolean[] checked=new boolean[labels.length];
+        for(int i=0;i<labels.length;i++)labels[i]=plan.conflictLabel(plan.conflicts.get(i));
+        new AlertDialog.Builder(this).setCustomTitle(title).setMultiChoiceItems(labels,checked,(dialog,index,value)->checked[index]=value)
+                .setNegativeButton("取消",null).setPositiveButton("合并恢复",(dialog,which)->{
+                    Set<String> groups=new HashSet<>();for(int i=0;i<checked.length;i++)if(checked[i])groups.add(plan.conflicts.get(i));applyRestorePlan(plan,groups);
+                }).show();
+    }
+    private void applyRestorePlan(PreferenceBackup.RestorePlan plan,Set<String> useBackup){
+        try{
+            Map<String,Object> entries=plan.merge(shortcuts.getAll(),useBackup);
+            android.content.SharedPreferences.Editor editor=shortcuts.edit();
+            for(Map.Entry<String,Object> entry:entries.entrySet()){
+                Object value=entry.getValue();
+                if(value instanceof Boolean)editor.putBoolean(entry.getKey(),(Boolean)value);
+                else if(value instanceof Long)editor.putLong(entry.getKey(),(Long)value);
+                else editor.putString(entry.getKey(),(String)value);
+            }
+            editor.apply();homeSignature="";if("home".equals(page))renderHome(true);toast(entries.isEmpty()?"已保留本机记录":"常用记录已恢复");
+        }catch(Exception e){toast(e.getMessage()==null?"恢复失败，未修改记录":e.getMessage());}
+    }
     private String clock(long seconds){return new SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(new Date(seconds*1000));}
     private String duration(long s){return String.format(Locale.ROOT,"%02d:%02d:%02d",s/3600,s/60%60,s%60);}
     private TextWatcher watcher(Done<String> done){return new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){done.accept(s.toString());}public void afterTextChanged(Editable e){}};}
     private void login(){startActivityForResult(new Intent(this,LoginActivity.class),100);}
-    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==100&&result==RESULT_OK){repo.api.reloadCookies();loginRequired=false;refreshHome();}}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if((request==101||request==102)&&result==RESULT_OK){backupResult(request,data);return;}if(request==100&&result==RESULT_OK){repo.api.reloadCookies();loginRequired=false;refreshHome();}}
     private void renderTypes(){
         screenStatus.setText("按设备类型保存游戏与区服，已选内容可直接修改");LinearLayout content=scrollBody();
         for(String t:GameRules.TYPES){
@@ -760,7 +822,8 @@ public final class MainActivity extends Activity {
         LinearLayout settings=ui.card();settings.setPadding(ui.dp(4),ui.dp(4),ui.dp(4),ui.dp(4));
         ui.add(settings,ui.settingsRow("路由器管理",R.drawable.ic_router,v->navigate("router")),0);ui.divider(settings,52);
         ui.add(settings,ui.settingsRow("服务公告",R.drawable.ic_notice,v->navigate("notices")),0);ui.divider(settings,52);
-        ui.add(settings,ui.settingsRow("帮助与反馈",R.drawable.ic_help,v->help()),0);ui.add(content,settings,10);
+        ui.add(settings,ui.settingsRow("帮助与反馈",R.drawable.ic_help,v->help()),0);ui.divider(settings,52);
+        ui.add(settings,ui.settingsRow("备份与恢复",R.drawable.ic_backup,v->backupOptions()),0);ui.add(content,settings,10);
 
         Button logout=ui.button("退出登录",false,v->confirm("退出登录","退出此应用的账号。路由器绑定关系将保留。","退出登录",()->command(()->{
             repo.api.request("GET","user/logout",null);repo.clear();return true;
