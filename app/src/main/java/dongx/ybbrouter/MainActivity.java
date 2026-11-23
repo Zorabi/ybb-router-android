@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
     private NativeUi ui;
     private android.content.SharedPreferences shortcuts;
     private LinearLayout root, body, bottom, header;
-    private TextView screenStatus;
+    private TextView screenStatus, routerConnection;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private String page = "home", type = "ps5", query = "", deviceQuery = "";
     private JSONObject config = new JSONObject(), deviceData = new JSONObject();
@@ -86,7 +86,7 @@ public final class MainActivity extends Activity {
             try { if (state.containsKey("selectedGame")) selectedGame = new JSONObject(state.getString("selectedGame")); } catch(Exception ignored) {}
             if ("regions".equals(page) && selectedGame == null) page = "home";
         }
-        showPage(); refreshHome();
+        showPage(); refreshHome(false);
     }
     private <T> void task(Job<T> job, Done<T> done) {
         int epoch = repo.epoch();
@@ -150,13 +150,15 @@ public final class MainActivity extends Activity {
         LinearLayout content = ui.column(); content.setPadding(ui.dp(20), ui.dp(8), ui.dp(20), ui.dp(24)); scroll.addView(content);
         body.addView(scroll, new LinearLayout.LayoutParams(-1, -1)); return content;
     }
-    private void refreshHome() {
-        screenStatus.setText("正在更新…"); errorText = "";
+    private void refreshHome() { refreshHome(true); }
+    private void refreshHome(boolean userRequested) {
+        if(userRequested||serverTime==0)screenStatus.setText("正在更新…");
+        errorText = "";
         task(() -> repo.fetch("routers", "router/bind?brand=xiaomi"), data -> {
-            routers = Repository.array(data); loginRequired = false; if ("home".equals(page)) renderHome(true);
+            routers = Repository.array(data); loginRequired = false; if ("home".equals(page)) renderHome(false);
         });
-        task(repo::fetchConfig, value -> { config = value; if ("home".equals(page)) renderHome(true); else if ("types".equals(page)) renderTypes(); prefetch(); });
-        refreshDevices(true);
+        task(repo::fetchConfig, value -> { config = value; if ("home".equals(page)) renderHome(false); else if ("types".equals(page)) renderTypes(); prefetch(); });
+        refreshDevices(false);
     }
     private void refreshDevices(boolean force) {
         if (deviceLoading) return; deviceLoading = true;
@@ -241,14 +243,18 @@ public final class MainActivity extends Activity {
     private void renderHome(boolean force) {
         if (!"home".equals(page)) return;
         if(deviceMenu!=null&&deviceMenu.isShowing()){updateElapsedLabels();return;}
-        String signature=devices().toString()+deviceData.optString("router_sn")+deviceData.optString("version")+config.toString()+routers.toString()+errorText+app.pendingIp+app.workingIp+app.commandBusy.get()+deviceQuery;
+        String signature=GameRules.deviceDisplaySignature(devices(),config)+deviceData.optString("router_sn")+deviceData.optString("version")+config.toString()+routers.toString()+errorText+app.pendingIp+app.workingIp+app.commandBusy.get()+deviceQuery+favoriteOnly+loginRequired;
         if (!force&&signature.equals(homeSignature)) {
             screenStatus.setText((freshDevices?"已同步 · ":"上次同步 · ")+clock(serverTime));
-            updateElapsedLabels();
+            updateRouterConnection();updateElapsedLabels();
             return;
         } homeSignature=signature;
         screenStatus.setText(!errorText.isEmpty()?errorText:serverTime==0?"正在连接游帮帮服务…":(freshDevices?"已同步 · ":"上次同步 · ")+clock(serverTime));
+        int scrollY=body.getChildCount()>0&&body.getChildAt(0) instanceof ScrollView?body.getChildAt(0).getScrollY():0;
         LinearLayout content=scrollBody();
+        ScrollView scroll=(ScrollView)body.getChildAt(0);
+        if(scrollY>0)scroll.post(()->scroll.scrollTo(0,scrollY));
+        routerConnection=null;
         if(loginRequired) {
             LinearLayout card=ui.card();ui.add(card,ui.label("登录游帮帮账号",21,ui.text,true),0);
             ui.add(card,ui.label("使用已绑定路由器的百度账号继续",14,ui.muted,false),10);
@@ -261,7 +267,7 @@ public final class MainActivity extends Activity {
         summary.addView(ui.symbol(R.drawable.ic_router,android.graphics.Color.WHITE,NativeUi.c("#395FCB")),new LinearLayout.LayoutParams(ui.dp(44),ui.dp(44)));
         LinearLayout routerLabels=ui.column();routerLabels.setPadding(ui.dp(12),0,0,0);
         ui.add(routerLabels,ui.label(routerName(),18,android.graphics.Color.WHITE,true),0);
-        ui.add(routerLabels,ui.label(online?(freshDevices?"路由器已连接":"上次连接的路由器"):"等待路由器连接",12,NativeUi.c("#DBE6FF"),false),6);
+        routerConnection=ui.label("",12,NativeUi.c("#DBE6FF"),false);ui.add(routerLabels,routerConnection,6);updateRouterConnection();
         summary.addView(routerLabels,new LinearLayout.LayoutParams(0,-2,1));
         Button settings=ui.iconButton(R.drawable.ic_arrow,"游戏与线路设置",v->navigate("types"));
         settings.setCompoundDrawables(ui.icon(R.drawable.ic_arrow,android.graphics.Color.WHITE,24),null,null,null);summary.addView(settings);
@@ -285,6 +291,9 @@ public final class MainActivity extends Activity {
         renderDeviceCards(cards,list);
         search.addTextChangedListener(watcher(value->{deviceQuery=value;renderDeviceCards(cards,list);}));
         if(!errorText.isEmpty())ui.add(content,ui.button("重新连接",false,v->refreshHome()),16);
+    }
+    private void updateRouterConnection(){
+        if(routerConnection!=null)routerConnection.setText(deviceData.optString("router_sn").isEmpty()?"等待路由器连接":freshDevices?"路由器已连接":"上次连接的路由器");
     }
     private void renderDeviceCards(LinearLayout holder,List<JSONObject> list) {
         holder.removeAllViews();deviceStatuses.clear();int visible=0;String needle=deviceQuery.toLowerCase(Locale.ROOT);

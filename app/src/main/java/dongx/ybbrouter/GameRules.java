@@ -50,6 +50,17 @@ public final class GameRules {
             return ip != 0 ? ip : a.optString("mac").compareTo(b.optString("mac"));
         };
     }
+    /** Only values displayed by device cards; changing telemetry must not reset the list. */
+    public static String deviceDisplaySignature(List<JSONObject> devices, JSONObject config) {
+        JSONArray rows = new JSONArray();
+        for (JSONObject device : devices) {
+            JSONObject info = device.optJSONObject("acc_info");
+            rows.put(new JSONArray().put(device.optString("mac")).put(device.optString("ip"))
+                    .put(device.optString("host")).put(effectiveType(device, config))
+                    .put(device.optBoolean("acc_status")).put(info == null ? 0 : info.optLong("start_time")));
+        }
+        return rows.toString();
+    }
     private static int typeIndex(String type) {
         for (int i=0;i<TYPES.length;i++) if(TYPES[i].equals(type)) return i;
         return TYPES.length;

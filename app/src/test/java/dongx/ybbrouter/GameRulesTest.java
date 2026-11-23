@@ -62,4 +62,22 @@ public class GameRulesTest {
         assertEquals(first.toString(),second.toString());assertSame(a,first.get(0));
         other.put("acc_status",true);java.util.Collections.sort(first,GameRules.deviceOrder(c));assertSame(other,first.get(0));
     }
+    @Test public void deviceTelemetryDoesNotChangeDisplayedList() throws Exception {
+        JSONObject device=new JSONObject().put("mac","a").put("ip","192.168.31.2").put("host","PS5").put("type","ps5")
+                .put("acc_status",true).put("acc_info",new JSONObject().put("start_time",100).put("latency",20));
+        java.util.List<JSONObject> devices=java.util.Collections.singletonList(device);
+        String before=GameRules.deviceDisplaySignature(devices,new JSONObject());
+        device.put("last_seen",200);device.getJSONObject("acc_info").put("latency",50).put("elapsed",99);
+        assertEquals(before,GameRules.deviceDisplaySignature(devices,new JSONObject()));
+    }
+    @Test public void deviceAddressAndAccelerationChangesUpdateDisplayedList() throws Exception {
+        JSONObject device=new JSONObject().put("mac","a").put("ip","192.168.31.2").put("host","PS5").put("type","ps5");
+        java.util.List<JSONObject> devices=java.util.Collections.singletonList(device);JSONObject config=new JSONObject();
+        String before=GameRules.deviceDisplaySignature(devices,config);
+        device.put("ip","192.168.31.3");String newAddress=GameRules.deviceDisplaySignature(devices,config);assertNotEquals(before,newAddress);
+        device.put("acc_status",true);String running=GameRules.deviceDisplaySignature(devices,config);assertNotEquals(newAddress,running);
+        device.put("acc_info",new JSONObject().put("start_time",100));assertNotEquals(running,GameRules.deviceDisplaySignature(devices,config));
+        String started=GameRules.deviceDisplaySignature(devices,config);
+        config.put("device_type",new JSONObject().put("a","windows"));assertNotEquals(started,GameRules.deviceDisplaySignature(devices,config));
+    }
 }
